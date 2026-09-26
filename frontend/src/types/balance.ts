@@ -48,10 +48,30 @@ export interface UncertaintyBreakdown {
   components: UncertaintyComponent[]
 }
 
+export interface BalanceSegment {
+  sequence: number
+  opening_snapshot_id: number
+  closing_snapshot_id: number
+  start_at: string
+  end_at: string
+  opening_mass_kg: number
+  closing_mass_kg: number
+  net_transfer_kg: number
+  transfer_ids: number[]
+  discrepancy_kg: number
+  uncertainty_kg: number
+  unexplained: boolean
+  level: DeviationLevel
+}
+
 export interface BalanceEvidence {
   algorithm_version?: string
   equation?: Record<string, number>
   uncertainty?: UncertaintyBreakdown
+  segments?: BalanceSegment[]
+  unexplained_intervals?: BalanceSegment[]
+  segment_attribution?: string
+  transfers_outside_chain?: number[]
   safety_boundary?: string
 }
 

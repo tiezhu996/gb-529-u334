@@ -18,7 +18,7 @@ import (
 	"lng-boiloff-gas-balance/backend/pkg/api"
 )
 
-const balanceAlgorithmVersion = "mass-balance-v1.0"
+const balanceAlgorithmVersion = "mass-balance-v1.1"
 
 type BalanceService struct {
 	repo            *repository.BalanceRepository
@@ -67,11 +67,15 @@ func (s *BalanceService) Run(ctx context.Context, request dto.RunBalanceRequest,
 	if err != nil {
 		return model.BalanceRun{}, err
 	}
+	chain, err := s.measurementRepo.ValidSnapshotsBetween(ctx, tank.ID, opening.MeasuredAt, closing.MeasuredAt)
+	if err != nil {
+		return model.BalanceRun{}, err
+	}
 	transfers, err := s.transferRepo.ConfirmedForPeriod(ctx, tank.ID, start, end)
 	if err != nil {
 		return model.BalanceRun{}, err
 	}
-	calculation, snapshotJSON, evidenceJSON, err := calculateBalanceRun(tank, opening, closing, transfers, start, end)
+	calculation, snapshotJSON, evidenceJSON, err := calculateBalanceRun(tank, opening, closing, chain, transfers, start, end)
 	if err != nil {
 		return model.BalanceRun{}, err
 	}
@@ -115,13 +119,17 @@ type calculatedBalance struct {
 }
 
 type balanceEvidence struct {
-	AlgorithmVersion string                   `json:"algorithm_version"`
-	Equation         map[string]float64       `json:"equation"`
-	Uncertainty      dto.UncertaintyBreakdown `json:"uncertainty"`
-	SafetyBoundary   string                   `json:"safety_boundary"`
+	AlgorithmVersion        string                   `json:"algorithm_version"`
+	Equation                map[string]float64       `json:"equation"`
+	Uncertainty             dto.UncertaintyBreakdown `json:"uncertainty"`
+	Segments                []dto.BalanceSegment     `json:"segments"`
+	UnexplainedIntervals    []dto.BalanceSegment     `json:"unexplained_intervals"`
+	SegmentAttribution      string                   `json:"segment_attribution"`
+	OutsideChainTransferIDs []uint                   `json:"transfers_outside_chain,omitempty"`
+	SafetyBoundary          string                   `json:"safety_boundary"`
 }
 
-func calculateBalanceRun(tank model.StorageTank, opening, closing model.MeasurementSnapshot, transfers []model.TransferOperation, start, end time.Time) (calculatedBalance, []byte, []byte, error) {
+func calculateBalanceRun(tank model.StorageTank, opening, closing model.MeasurementSnapshot, chain []model.MeasurementSnapshot, transfers []model.TransferOperation, start, end time.Time) (calculatedBalance, []byte, []byte, error) {
 	inflows, outflows := make([]float64, 0), make([]float64, 0)
 	uncertaintyInputs := []balance.UncertaintyInput{
 		{Source: "opening_snapshot", EntityID: opening.ID, MassKG: opening.CalculatedLiquidMassKG, UncertaintyPct: opening.MeasurementUncertaintyPct},
@@ -170,6 +178,10 @@ func calculateBalanceRun(tank model.StorageTank, opening, closing model.Measurem
 		Relationship: level,
 		Components:   components,
 	}
+	segments, unexplained, outsideChain, err := reconcileIntervalSegments(opening, closing, chain, transfers)
+	if err != nil {
+		return calculatedBalance{}, nil, nil, err
+	}
 	evidence := balanceEvidence{
 		AlgorithmVersion: balanceAlgorithmVersion,
 		Equation: map[string]float64{
@@ -178,8 +190,12 @@ func calculateBalanceRun(tank model.StorageTank, opening, closing model.Measurem
 			"closing_mass_kg":                  closing.CalculatedLiquidMassKG,
 			"estimated_bog_and_unexplained_kg": deviation,
 		},
-		Uncertainty:    breakdown,
-		SafetyBoundary: "未解释差异仅为工程分析结果，不直接认定为泄漏或安全事件。",
+		Uncertainty:             breakdown,
+		Segments:                segments,
+		UnexplainedIntervals:    unexplained,
+		SegmentAttribution:      "确认转移按开始时刻归属到所处快照区间；区间差值 = 区间期初质量 + 区间确认转移净量 - 区间期末质量；差值绝对值大于该段合成不确定度时记为未解释区间。",
+		OutsideChainTransferIDs: outsideChain,
+		SafetyBoundary:          "未解释差异仅为工程分析结果，不直接认定为泄漏或安全事件。",
 	}
 	inputSnapshot := map[string]any{
 		"algorithm_version":   balanceAlgorithmVersion,
@@ -189,6 +205,7 @@ func calculateBalanceRun(tank model.StorageTank, opening, closing model.Measurem
 		"tank":                tank,
 		"opening_snapshot":    opening,
 		"closing_snapshot":    closing,
+		"interval_snapshots":  chain,
 		"confirmed_transfers": transfers,
 	}
 	snapshotJSON, err := json.Marshal(inputSnapshot)
@@ -210,6 +227,61 @@ func calculateBalanceRun(tank model.StorageTank, opening, closing model.Measurem
 		DeviationPct:    balance.DeviationPercent(deviation, opening.CalculatedLiquidMassKG),
 		DeviationLevel:  level,
 	}, snapshotJSON, evidenceJSON, nil
+}
+
+// reconcileIntervalSegments 把期内有效快照链与确认转移转换为逐段核对证据，
+// 并筛出差值超过该段合成不确定度的未解释区间。
+func reconcileIntervalSegments(opening, closing model.MeasurementSnapshot, chain []model.MeasurementSnapshot, transfers []model.TransferOperation) ([]dto.BalanceSegment, []dto.BalanceSegment, []uint, error) {
+	if len(chain) < 2 || chain[0].ID != opening.ID || chain[len(chain)-1].ID != closing.ID {
+		return nil, nil, nil, fmt.Errorf("interval snapshot chain does not match boundary snapshots")
+	}
+	snapshotInputs := make([]balance.SegmentSnapshotInput, 0, len(chain))
+	for _, snapshot := range chain {
+		snapshotInputs = append(snapshotInputs, balance.SegmentSnapshotInput{
+			ID:             snapshot.ID,
+			MeasuredAt:     snapshot.MeasuredAt,
+			MassKG:         snapshot.CalculatedLiquidMassKG,
+			UncertaintyPct: snapshot.MeasurementUncertaintyPct,
+		})
+	}
+	transferInputs := make([]balance.SegmentTransferInput, 0, len(transfers))
+	for _, transfer := range transfers {
+		transferInputs = append(transferInputs, balance.SegmentTransferInput{
+			ID:             transfer.ID,
+			OperationType:  transfer.OperationType,
+			StartAt:        transfer.StartAt,
+			MassKG:         transfer.MeasuredMassKG,
+			UncertaintyPct: transfer.MeasurementUncertaintyPct,
+		})
+	}
+	reconciliation, err := balance.ReconcileSegments(snapshotInputs, transferInputs)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("reconcile interval segments: %w", err)
+	}
+	segments := make([]dto.BalanceSegment, 0, len(reconciliation.Segments))
+	unexplained := make([]dto.BalanceSegment, 0, len(reconciliation.Segments))
+	for _, segment := range reconciliation.Segments {
+		item := dto.BalanceSegment{
+			Sequence:          segment.Sequence,
+			OpeningSnapshotID: segment.OpeningSnapshotID,
+			ClosingSnapshotID: segment.ClosingSnapshotID,
+			StartAt:           segment.StartAt,
+			EndAt:             segment.EndAt,
+			OpeningMassKG:     segment.OpeningMassKG,
+			ClosingMassKG:     segment.ClosingMassKG,
+			NetTransferKG:     segment.NetTransferKG,
+			TransferIDs:       segment.TransferIDs,
+			DiscrepancyKG:     segment.DiscrepancyKG,
+			UncertaintyKG:     segment.UncertaintyKG,
+			Unexplained:       segment.Unexplained,
+			Level:             segment.Level,
+		}
+		segments = append(segments, item)
+		if item.Unexplained {
+			unexplained = append(unexplained, item)
+		}
+	}
+	return segments, unexplained, reconciliation.OutsideChainTransferIDs, nil
 }
 
 func (s *BalanceService) Submit(ctx context.Context, id uint, request dto.SubmitBalanceRequest, actor repository.Actor) (model.BalanceRun, error) {

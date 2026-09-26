@@ -116,6 +116,16 @@ func (r *MeasurementRepository) BoundarySnapshots(ctx context.Context, tankID ui
 	return opening, closing, nil
 }
 
+func (r *MeasurementRepository) ValidSnapshotsBetween(ctx context.Context, tankID uint, from, to time.Time) ([]model.MeasurementSnapshot, error) {
+	var snapshots []model.MeasurementSnapshot
+	if err := r.db.WithContext(ctx).
+		Where("tank_id = ? AND measured_at >= ? AND measured_at <= ? AND quality_flag <> ?", tankID, from.UTC(), to.UTC(), constants.QualityInvalid).
+		Order("measured_at ASC, id ASC").Find(&snapshots).Error; err != nil {
+		return nil, fmt.Errorf("list valid interval snapshots: %w", err)
+	}
+	return snapshots, nil
+}
+
 func (r *MeasurementRepository) ListForTank(ctx context.Context, tankID uint) ([]model.MeasurementSnapshot, error) {
 	var snapshots []model.MeasurementSnapshot
 	if err := r.db.WithContext(ctx).Where("tank_id = ?", tankID).Order("measured_at ASC").Find(&snapshots).Error; err != nil {

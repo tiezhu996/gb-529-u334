@@ -43,3 +43,20 @@ type UncertaintyBreakdown struct {
 	Relationship constants.DeviationLevel `json:"relationship"`
 	Components   []UncertaintyComponent   `json:"components"`
 }
+
+// BalanceSegment 是相邻两条有效快照之间的一次分段质量核对证据。
+type BalanceSegment struct {
+	Sequence          int                      `json:"sequence"`
+	OpeningSnapshotID uint                     `json:"opening_snapshot_id"`
+	ClosingSnapshotID uint                     `json:"closing_snapshot_id"`
+	StartAt           time.Time                `json:"start_at"`
+	EndAt             time.Time                `json:"end_at"`
+	OpeningMassKG     float64                  `json:"opening_mass_kg"`
+	ClosingMassKG     float64                  `json:"closing_mass_kg"`
+	NetTransferKG     float64                  `json:"net_transfer_kg"`
+	TransferIDs       []uint                   `json:"transfer_ids"`
+	DiscrepancyKG     float64                  `json:"discrepancy_kg"`
+	UncertaintyKG     float64                  `json:"uncertainty_kg"`
+	Unexplained       bool                     `json:"unexplained"`
+	Level             constants.DeviationLevel `json:"level"`
+}
