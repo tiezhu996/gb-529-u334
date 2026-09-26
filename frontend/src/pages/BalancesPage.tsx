@@ -4,6 +4,7 @@ import { CheckCircle2, Play, RefreshCw, Send, XCircle } from 'lucide-react'
 import { EvidenceBreakdownPanel } from '../components/common/EvidenceBreakdownPanel'
 import { MassBalanceWaterfall } from '../components/common/MassBalanceWaterfall'
 import { PageHeader } from '../components/common/PageHeader'
+import { SegmentReconciliationPanel } from '../components/common/SegmentReconciliationPanel'
 import { useAuth } from '../hooks/useAuth'
 import { useBalanceRun } from '../hooks/useBalanceRun'
 import { useTankStore } from '../stores/tankStore'
@@ -54,7 +55,7 @@ export function BalancesPage() {
       <PageHeader
         eyebrow="MASS BALANCE WORKBENCH"
         title="平衡工作台"
-        description="重放期初、物理转移和期末证据，输出 BOG / 未解释项及其不确定度关系。"
+        description="重放期初、物理转移和期末证据，输出 BOG / 未解释项及其不确定度关系，并按期内快照逐段定位对不上的时段。"
         actions={
           <>
             <Button icon={<RefreshCw size={16} />} onClick={() => void store.load()}>刷新</Button>
@@ -79,6 +80,7 @@ export function BalancesPage() {
               </div>
             )}
           </div>
+          <SegmentReconciliationPanel run={selected} />
           <EvidenceBreakdownPanel run={selected} />
         </div>
         <aside className="run-rail">

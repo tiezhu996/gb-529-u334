@@ -123,3 +123,16 @@ func (r *MeasurementRepository) ListForTank(ctx context.Context, tankID uint) ([
 	}
 	return snapshots, nil
 }
+
+// ValidInPeriod returns the tank's good/suspect snapshots measured within
+// [periodStart, periodEnd], ordered ascending by measured time. The result is
+// used to split a balance period into independently reconciled segments.
+func (r *MeasurementRepository) ValidInPeriod(ctx context.Context, tankID uint, periodStart, periodEnd time.Time) ([]model.MeasurementSnapshot, error) {
+	var snapshots []model.MeasurementSnapshot
+	if err := r.db.WithContext(ctx).
+		Where("tank_id = ? AND measured_at >= ? AND measured_at <= ? AND quality_flag <> ?", tankID, periodStart.UTC(), periodEnd.UTC(), constants.QualityInvalid).
+		Order("measured_at ASC, id ASC").Find(&snapshots).Error; err != nil {
+		return nil, fmt.Errorf("list valid in-period snapshots: %w", err)
+	}
+	return snapshots, nil
+}

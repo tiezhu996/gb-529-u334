@@ -48,10 +48,39 @@ export interface UncertaintyBreakdown {
   components: UncertaintyComponent[]
 }
 
+export interface BalanceSegment {
+  index: number
+  opening_snapshot_id: number
+  closing_snapshot_id: number
+  start_at: string
+  end_at: string
+  mass_change_kg: number
+  net_transfer_kg: number
+  transfer_count: number
+  unexplained_kg: number
+  uncertainty_kg: number
+  exceeds_uncertainty: boolean
+}
+
+export interface UnallocatedTransfer {
+  transfer_id: number
+  reason: string
+}
+
+export interface SegmentReconciliationEvidence {
+  snapshot_count: number
+  segment_count: number
+  unexplained_count: number
+  items: BalanceSegment[]
+  unallocated_transfers?: UnallocatedTransfer[]
+  note: string
+}
+
 export interface BalanceEvidence {
   algorithm_version?: string
   equation?: Record<string, number>
   uncertainty?: UncertaintyBreakdown
+  segments?: SegmentReconciliationEvidence
   safety_boundary?: string
 }
 

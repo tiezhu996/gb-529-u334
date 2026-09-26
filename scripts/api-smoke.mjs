@@ -206,6 +206,17 @@ async function main() {
   });
 
   const acceptedRun = await runAndSubmit(analyst, tankID, periodStart, periodEnd, "accepted-path");
+  const segmentEvidence = acceptedRun.evidence_json?.segments;
+  if (
+    !segmentEvidence ||
+    segmentEvidence.segment_count !== 1 ||
+    segmentEvidence.items.length !== 1 ||
+    !segmentEvidence.items[0].start_at ||
+    !segmentEvidence.items[0].end_at ||
+    typeof segmentEvidence.items[0].unexplained_kg !== "number"
+  ) {
+    fail("intra-period segment evidence is incomplete", acceptedRun);
+  }
   const uncertainty = await api(
     "uncertainty breakdown",
     proxy,
